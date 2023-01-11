@@ -1,2 +1,2 @@
-all: telnet-chatd.c
-	gcc telnet-chatd.c -ltelnet -o telnet-chatd
+all: telnet-gdb.c
+	gcc telnet-gdb.c -ltelnet -o telnet-gdb

@@ -54,15 +54,15 @@ static const telnet_telopt_t telopts[] = {
 	{ -1, 0, 0 }
 };
 
-struct user_t {
+typedef struct user_t {
 	char *name;
 	SOCKET sock;
 	telnet_t *telnet;
-	char linebuf[256];
+	char linebuf[LINEBUFFER_SIZE];
 	int linepos;
-};
+} user_t;
 
-static struct user_t users[MAX_USERS];
+static user_t users[MAX_USERS];
 
 static void linebuffer_push(char *buffer, size_t size, int *linepos,
 		char ch, void (*cb)(const char *line, size_t overflow, void *ud),
@@ -133,7 +133,7 @@ static void _send(SOCKET sock, const char *buffer, size_t size) {
 
 /* process input line */
 static void _online(const char *line, size_t overflow, void *ud) {
-	struct user_t *user = (struct user_t*)ud;
+	user_t *user = (user_t*)ud;
 	int i;
 
 	(void)overflow;
@@ -162,12 +162,12 @@ static void _online(const char *line, size_t overflow, void *ud) {
 
 	/* if line is "quit" then, well, quit */
 	if (strcmp(line, "quit") == 0) {
+		_message(user->name, "** HAS QUIT **");
 		close(user->sock);
 		user->sock = -1;
-		_message(user->name, "** HAS QUIT **");
 		free(user->name);
 		user->name = 0;
-		telnet_free(user->telnet);
+		// telnet_free(user->telnet);
 		return;
 	}
 
@@ -175,7 +175,7 @@ static void _online(const char *line, size_t overflow, void *ud) {
 	_message(user->name, line);
 }
 
-static void _input(struct user_t *user, const char *buffer,
+static void _input(user_t *user, const char *buffer,
 		size_t size) {
 	unsigned int i;
 	for (i = 0; user->sock != -1 && i != size; ++i)
@@ -185,7 +185,7 @@ static void _input(struct user_t *user, const char *buffer,
 
 static void _event_handler(telnet_t *telnet, telnet_event_t *ev,
 		void *user_data) {
-	struct user_t *user = (struct user_t*)user_data;
+	user_t *user = (user_t*)user_data;
 
 	switch (ev->type) {
 	/* data received */
@@ -367,7 +367,6 @@ int main(int argc, char **argv) {
 			}
 		}
 	}
-
 	/* not that we can reach this, but GCC will cry if it's not here */
 	return 0;
 }
