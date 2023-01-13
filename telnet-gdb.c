@@ -167,7 +167,10 @@ static void _online(const char *line, size_t overflow, void *ud) {
 		user->sock = -1;
 		free(user->name);
 		user->name = 0;
-		// telnet_free(user->telnet);
+		if (user->telnet != 0) {
+			telnet_free(user->telnet);
+		}
+		user->telnet = 0;
 		return;
 	}
 
@@ -196,7 +199,9 @@ static void _event_handler(telnet_t *telnet, telnet_event_t *ev,
 		break;
 	/* data must be sent */
 	case TELNET_EV_SEND:
-		_send(user->sock, ev->data.buffer, ev->data.size);
+		if (user != 0) {
+			_send(user->sock, ev->data.buffer, ev->data.size);
+		}
 		break;
 	/* enable compress2 if accepted by client */
 	case TELNET_EV_DO:
