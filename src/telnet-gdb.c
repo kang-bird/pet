@@ -10,8 +10,8 @@
  */
 
 #if !defined(_WIN32)
-#	if !defined(_BSD_SOURCE)
-#		define _BSD_SOURCE
+#	if !defined(_DEFAULT_SOURCE)
+#		define _DEFAULT_SOURCE
 #	endif
 
 #	include <sys/socket.h>
@@ -54,15 +54,15 @@ static const telnet_telopt_t telopts[] = {
 	{ -1, 0, 0 }
 };
 
-struct user_t {
+typedef struct user_t {
 	char *name;
 	SOCKET sock;
 	telnet_t *telnet;
-	char linebuf[256];
+	char linebuf[LINEBUFFER_SIZE];
 	int linepos;
-};
+} user_t;
 
-static struct user_t users[MAX_USERS];
+static user_t users[MAX_USERS];
 
 static void linebuffer_push(char *buffer, size_t size, int *linepos,
 		char ch, void (*cb)(const char *line, size_t overflow, void *ud),
@@ -96,11 +96,17 @@ static void linebuffer_push(char *buffer, size_t size, int *linepos,
 }
 
 static void _message(const char *from, const char *msg) {
-	int i;
-	for (i = 0; i != MAX_USERS; ++i) {
+	for (int i = 0; i != MAX_USERS; ++i) {
 		if (users[i].sock != -1) {
 			telnet_printf(users[i].telnet, "%s: %s\n", from, msg);
 		}
+	}
+}
+
+// message to concretic user
+static void _message_to_user(user_t *user, const char *msg) {
+	if (user->sock != -1) {
+		telnet_printf(user->telnet, "%s: %s\n", user->name, msg);
 	}
 }
 
@@ -133,7 +139,7 @@ static void _send(SOCKET sock, const char *buffer, size_t size) {
 
 /* process input line */
 static void _online(const char *line, size_t overflow, void *ud) {
-	struct user_t *user = (struct user_t*)ud;
+	user_t *user = (user_t*)ud;
 	int i;
 
 	(void)overflow;
@@ -160,22 +166,28 @@ static void _online(const char *line, size_t overflow, void *ud) {
 		return;
 	}
 
+	_message_to_user(user, line);
+
 	/* if line is "quit" then, well, quit */
 	if (strcmp(line, "quit") == 0) {
+		printf("%s ** HAS QUIT **\n", user->name);
+		_message(user->name, "** HAS QUIT **");
 		close(user->sock);
 		user->sock = -1;
-		_message(user->name, "** HAS QUIT **");
 		free(user->name);
-		user->name = 0;
-		telnet_free(user->telnet);
+		user->name = NULL;
+		if (user->telnet) {
+			telnet_free(user->telnet);
+		}
+		user->telnet = NULL;
 		return;
 	}
 
 	/* just a message -- send to all users */
-	_message(user->name, line);
+	// _message(user->name, line);
 }
 
-static void _input(struct user_t *user, const char *buffer,
+static void _input(user_t *user, const char *buffer,
 		size_t size) {
 	unsigned int i;
 	for (i = 0; user->sock != -1 && i != size; ++i)
@@ -185,18 +197,20 @@ static void _input(struct user_t *user, const char *buffer,
 
 static void _event_handler(telnet_t *telnet, telnet_event_t *ev,
 		void *user_data) {
-	struct user_t *user = (struct user_t*)user_data;
+	user_t *user = (user_t*)user_data;
 
 	switch (ev->type) {
 	/* data received */
 	case TELNET_EV_DATA:
 		_input(user, ev->data.buffer, ev->data.size);
-					telnet_negotiate(telnet, TELNET_WONT, TELNET_TELOPT_ECHO);
-			telnet_negotiate(telnet, TELNET_WILL, TELNET_TELOPT_ECHO);
+					// telnet_negotiate(telnet, TELNET_WONT, TELNET_TELOPT_ECHO);
+			// telnet_negotiate(telnet, TELNET_WILL, TELNET_TELOPT_ECHO);
 		break;
 	/* data must be sent */
 	case TELNET_EV_SEND:
-		_send(user->sock, ev->data.buffer, ev->data.size);
+		if (user != 0 && user->name) {
+			_send(user->sock, ev->data.buffer, ev->data.size);
+		}
 		break;
 	/* enable compress2 if accepted by client */
 	case TELNET_EV_DO:
@@ -213,6 +227,7 @@ static void _event_handler(telnet_t *telnet, telnet_event_t *ev,
 			user->name = 0;
 		}
 		telnet_free(user->telnet);
+		user->telnet = NULL;
 		break;
 	default:
 		/* ignore */
@@ -298,7 +313,7 @@ int main(int argc, char **argv) {
 				pfd[i].events = 0;
 			}
 		}
-
+		
 		/* poll */
 		rs = poll(pfd, MAX_USERS + 1, -1);
 		if (rs == -1 && errno != EINTR) {
@@ -359,6 +374,7 @@ int main(int argc, char **argv) {
 						users[i].name = 0;
 					}
 					telnet_free(users[i].telnet);
+					users[i].telnet = NULL;
 				} else if (errno != EINTR) {
 					fprintf(stderr, "recv(client) failed: %s\n",
 							strerror(errno));
@@ -367,7 +383,6 @@ int main(int argc, char **argv) {
 			}
 		}
 	}
-
 	/* not that we can reach this, but GCC will cry if it's not here */
 	return 0;
 }
