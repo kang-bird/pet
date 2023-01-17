@@ -10,8 +10,8 @@
  */
 
 #if !defined(_WIN32)
-#	if !defined(_BSD_SOURCE)
-#		define _BSD_SOURCE
+#	if !defined(_DEFAULT_SOURCE)
+#		define _DEFAULT_SOURCE
 #	endif
 
 #	include <sys/socket.h>
@@ -96,11 +96,17 @@ static void linebuffer_push(char *buffer, size_t size, int *linepos,
 }
 
 static void _message(const char *from, const char *msg) {
-	int i;
-	for (i = 0; i != MAX_USERS; ++i) {
+	for (int i = 0; i != MAX_USERS; ++i) {
 		if (users[i].sock != -1) {
 			telnet_printf(users[i].telnet, "%s: %s\n", from, msg);
 		}
+	}
+}
+
+// message to concretic user
+static void _message_to_user(user_t *user, const char *msg) {
+	if (user->sock != -1) {
+		telnet_printf(user->telnet, "%s: %s\n", user->name, msg);
 	}
 }
 
@@ -160,22 +166,25 @@ static void _online(const char *line, size_t overflow, void *ud) {
 		return;
 	}
 
+	_message_to_user(user, line);
+
 	/* if line is "quit" then, well, quit */
 	if (strcmp(line, "quit") == 0) {
+		printf("%s ** HAS QUIT **\n", user->name);
 		_message(user->name, "** HAS QUIT **");
 		close(user->sock);
 		user->sock = -1;
 		free(user->name);
-		user->name = 0;
-		if (user->telnet != 0) {
+		user->name = NULL;
+		if (user->telnet) {
 			telnet_free(user->telnet);
 		}
-		user->telnet = 0;
+		user->telnet = NULL;
 		return;
 	}
 
 	/* just a message -- send to all users */
-	_message(user->name, line);
+	// _message(user->name, line);
 }
 
 static void _input(user_t *user, const char *buffer,
@@ -194,12 +203,12 @@ static void _event_handler(telnet_t *telnet, telnet_event_t *ev,
 	/* data received */
 	case TELNET_EV_DATA:
 		_input(user, ev->data.buffer, ev->data.size);
-					telnet_negotiate(telnet, TELNET_WONT, TELNET_TELOPT_ECHO);
-			telnet_negotiate(telnet, TELNET_WILL, TELNET_TELOPT_ECHO);
+					// telnet_negotiate(telnet, TELNET_WONT, TELNET_TELOPT_ECHO);
+			// telnet_negotiate(telnet, TELNET_WILL, TELNET_TELOPT_ECHO);
 		break;
 	/* data must be sent */
 	case TELNET_EV_SEND:
-		if (user != 0) {
+		if (user != 0 && user->name) {
 			_send(user->sock, ev->data.buffer, ev->data.size);
 		}
 		break;
@@ -218,6 +227,7 @@ static void _event_handler(telnet_t *telnet, telnet_event_t *ev,
 			user->name = 0;
 		}
 		telnet_free(user->telnet);
+		user->telnet = NULL;
 		break;
 	default:
 		/* ignore */
@@ -303,7 +313,7 @@ int main(int argc, char **argv) {
 				pfd[i].events = 0;
 			}
 		}
-
+		
 		/* poll */
 		rs = poll(pfd, MAX_USERS + 1, -1);
 		if (rs == -1 && errno != EINTR) {
@@ -364,6 +374,7 @@ int main(int argc, char **argv) {
 						users[i].name = 0;
 					}
 					telnet_free(users[i].telnet);
+					users[i].telnet = NULL;
 				} else if (errno != EINTR) {
 					fprintf(stderr, "recv(client) failed: %s\n",
 							strerror(errno));
