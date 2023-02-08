@@ -20,6 +20,7 @@
 #	include <netdb.h>
 #	include <poll.h>
 #	include <unistd.h>
+#	include <pthread.h>
 
 #	define SOCKET int
 #else
@@ -48,6 +49,7 @@
 
 #define MAX_USERS 64
 #define LINEBUFFER_SIZE 256
+#define BUFFER_SIZE 512
 
 static const telnet_telopt_t telopts[] = {
 	{ TELNET_TELOPT_COMPRESS2,	TELNET_WILL, TELNET_DONT },
@@ -62,7 +64,14 @@ typedef struct user_t {
 	int linepos;
 } user_t;
 
+typedef struct thread_data_t {
+	struct pollfd* pfd;
+	int* rs; 
+	char* buffer;
+} thread_data_t;
+
 static user_t users[MAX_USERS];
+static pthread_t threads[MAX_USERS];
 
 static void linebuffer_push(char *buffer, size_t size, int *linepos,
 		char ch, void (*cb)(const char *line, size_t overflow, void *ud),
@@ -235,8 +244,38 @@ static void _event_handler(telnet_t *telnet, telnet_event_t *ev,
 	}
 }
 
+static void* _read_from_client(void* thread_data) {
+	thread_data_t *data = (thread_data_t*) thread_data;
+	for (int i = 0; i != MAX_USERS; ++i) {
+	/* skip users that aren't actually connected */
+		if (users[i].sock == -1)
+			continue;
+			
+		if (data->pfd[i].revents & (POLLIN | POLLERR | POLLHUP)) {
+			if ((*(data->rs) = recv(users[i].sock, data->buffer, BUFFER_SIZE, 0)) > 0) {
+				telnet_recv(users[i].telnet, data->buffer, *(data->rs));
+			} else if (*(data->rs) == 0) {
+				printf("Connection closed.\n");
+				close(users[i].sock);
+				users[i].sock = -1;
+				if (users[i].name != 0) {
+					_message(users[i].name, "** HAS DISCONNECTED **");
+					free(users[i].name);
+					users[i].name = 0;
+				}
+				telnet_free(users[i].telnet);
+				users[i].telnet = NULL;
+				// pthread_exit(0);
+			} else if (errno != EINTR) {
+				fprintf(stderr, "recv(client) failed: %s\n", strerror(errno));
+				exit(1);
+			}
+		}
+	}
+}
+
 int main(int argc, char **argv) {
-	char buffer[512];
+	char buffer[BUFFER_SIZE];
 	short listen_port;
 	SOCKET listen_sock;
 	SOCKET client_sock;
@@ -245,6 +284,10 @@ int main(int argc, char **argv) {
 	struct sockaddr_in addr;
 	socklen_t addrlen;
 	struct pollfd pfd[MAX_USERS + 1];
+	thread_data_t data;
+	data.buffer = buffer;
+	data.pfd = pfd;
+	data.rs = &rs;
 
 	/* initialize Winsock */
 #if defined(_WIN32)
@@ -356,32 +399,7 @@ int main(int argc, char **argv) {
 		}
 
 		/* read from client */
-		for (i = 0; i != MAX_USERS; ++i) {
-			/* skip users that aren't actually connected */
-			if (users[i].sock == -1)
-				continue;
-
-			if (pfd[i].revents & (POLLIN | POLLERR | POLLHUP)) {
-				if ((rs = recv(users[i].sock, buffer, sizeof(buffer), 0)) > 0) {
-					telnet_recv(users[i].telnet, buffer, rs);
-				} else if (rs == 0) {
-					printf("Connection closed.\n");
-					close(users[i].sock);
-					users[i].sock = -1;
-					if (users[i].name != 0) {
-						_message(users[i].name, "** HAS DISCONNECTED **");
-						free(users[i].name);
-						users[i].name = 0;
-					}
-					telnet_free(users[i].telnet);
-					users[i].telnet = NULL;
-				} else if (errno != EINTR) {
-					fprintf(stderr, "recv(client) failed: %s\n",
-							strerror(errno));
-					exit(1);
-				}
-			}
-		}
+		read_from_client(&data);
 	}
 	/* not that we can reach this, but GCC will cry if it's not here */
 	return 0;
