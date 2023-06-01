@@ -1912,12 +1912,23 @@ char    l_buf[1024];
                 return -1;
             }
 
+            if(!l_pass_str) {
+                dap_chain_node_cli_set_reply_text(str_reply, "Wallet password option <-password>  not defined");
+                return -1;
+            }
+
             l_wallet = dap_chain_wallet_open(l_wallet_name, c_wallets_path);
+            if (!l_wallet) {
+                return  dap_chain_node_cli_set_reply_text(str_reply, "wrong password"), -1;
+            } else if (l_wallet->flags & DAP_WALLET$M_FL_ACTIVE) {
+                return  dap_chain_node_cli_set_reply_text(str_reply, "Wallet can't be converted twice"), -1;
+            }
             if ( dap_chain_wallet_save(l_wallet, l_pass_str) ) {
                 return  dap_chain_node_cli_set_reply_text(str_reply, "Wallet is not converted because of internal error"), -1;
             }
 
             log_it(L_INFO, "Wallet %s has been converted", l_wallet_name);
+            dap_string_append_printf(l_string_ret, "Wallet: %s successfully converted\n", l_wallet_name);
             dap_chain_wallet_close(l_wallet);
         }
         break;
